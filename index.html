@@ -1,0 +1,1495 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EHC Chur · Sponsoring Dashboard</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18",
+      "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+      "react-dom/client": "https://esm.sh/react-dom@18/client",
+      "lucide-react": "https://esm.sh/lucide-react@0.383.0",
+      "recharts": "https://esm.sh/recharts@2.12.7"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #F7F4EE; font-family: Inter, sans-serif; }
+    #root { min-height: 100vh; }
+    .animate-spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module" data-presets="react">
+    import React, { useState, useEffect, useMemo } from "react";
+    import { createRoot } from "react-dom/client";
+    import {
+      Plus, X, Pencil, Trash2, Search, AlertTriangle, CheckCircle2,
+      Clock, Lock, Unlock, Phone, Mail, Tag, Loader2,
+      Banknote, Coins, Package, FileSignature, ArrowDownCircle, ArrowUpCircle,
+      ChevronDown, ChevronRight, Upload, Sparkles, TrendingUp, Calendar, User, XCircle
+    } from "lucide-react";
+    import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from "recharts";
+
+    // ─── Storage-Abstraktionsschicht ──────────────────────────────────────────
+    // Standard: localStorage (ein Gerät). Optional: JSONBin (geteilt im Team).
+    const AppStorage = {
+      _getCfg() {
+        try { return JSON.parse(localStorage.getItem("ehc_storage_cfg") || "{}"); }
+        catch { return {}; }
+      },
+      async _readBin() {
+        const cfg = this._getCfg();
+        try {
+          const res = await fetch(`https://api.jsonbin.io/v3/b/${cfg.binId}/latest`, {
+            headers: { "X-Master-Key": cfg.apiKey, "X-Bin-Meta": "false" }
+          });
+          if (!res.ok) return {};
+          const d = await res.json();
+          return d.record || d;
+        } catch { return {}; }
+      },
+      async get(key) {
+        const cfg = this._getCfg();
+        if (cfg.apiKey && cfg.binId) {
+          const bin = await this._readBin();
+          return bin[key] !== undefined
+            ? { value: typeof bin[key] === "string" ? bin[key] : JSON.stringify(bin[key]) }
+            : null;
+        }
+        const v = localStorage.getItem("ehc_" + key);
+        return v ? { value: v } : null;
+      },
+      async set(key, value) {
+        const cfg = this._getCfg();
+        if (cfg.apiKey && cfg.binId) {
+          try {
+            const bin = await this._readBin();
+            bin[key] = typeof value === "string" ? JSON.parse(value) : value;
+            await fetch(`https://api.jsonbin.io/v3/b/${cfg.binId}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json", "X-Master-Key": cfg.apiKey },
+              body: JSON.stringify(bin)
+            });
+          } catch { localStorage.setItem("ehc_" + key, value); }
+        } else {
+          localStorage.setItem("ehc_" + key, value);
+        }
+      }
+    };
+
+    // ─── Einstellungen-Modal ──────────────────────────────────────────────────
+    function SettingsModal({ onClose }) {
+      const savedCfg = (() => {
+        try { return JSON.parse(localStorage.getItem("ehc_storage_cfg") || "{}"); } catch { return {}; }
+      })();
+      const savedApiKey = localStorage.getItem("ehc_anthropic_key") || "";
+
+      const [binId, setBinId] = useState(savedCfg.binId || "");
+      const [apiKey, setApiKey] = useState(savedCfg.apiKey || "");
+      const [anthropicKey, setAnthropicKey] = useState(savedApiKey);
+      const [saved, setSaved] = useState(false);
+
+      function save() {
+        if (binId && apiKey) {
+          localStorage.setItem("ehc_storage_cfg", JSON.stringify({ binId, apiKey }));
+        } else {
+          localStorage.removeItem("ehc_storage_cfg");
+        }
+        if (anthropicKey) {
+          localStorage.setItem("ehc_anthropic_key", anthropicKey);
+        } else {
+          localStorage.removeItem("ehc_anthropic_key");
+        }
+        setSaved(true);
+        setTimeout(() => { setSaved(false); onClose(); }, 800);
+      }
+
+      const C = { INK: "#13131a", PAPER: "#F7F4EE", RED: "#C8112E", LINE: "#E4DFD3", SLATE: "#6B6A66" };
+      const inp = { width: "100%", background: "#fff", border: `1px solid ${C.LINE}`, borderRadius: 4, padding: "9px 11px", fontSize: 14, color: C.INK, outline: "none", boxSizing: "border-box" };
+      const label = { display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, color: "#0E0E10", fontFamily: "'Oswald', sans-serif", marginBottom: 5 };
+
+      return (
+        <div style={{ position: "fixed", inset: 0, zIndex: 100, overflowY: "auto", background: "rgba(0,0,0,0.5)" }}>
+          <div style={{ width: "100%", maxWidth: 560, margin: "60px auto", background: C.PAPER, borderRadius: 10, borderTop: `4px solid ${C.RED}`, paddingBottom: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 24px 12px", borderBottom: `1px solid ${C.LINE}`, background: C.PAPER }}>
+              <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 18, fontWeight: 700, color: C.INK }}>Einstellungen</h2>
+              <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE }}><X size={20} /></button>
+            </div>
+            <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* Geteilter Speicher */}
+              <div style={{ padding: 16, borderRadius: 8, border: `1px solid ${C.LINE}`, background: "#fff" }}>
+                <p style={{ fontWeight: 700, fontSize: 14, color: C.INK, marginBottom: 4 }}>🔗 Geteilter Speicher (JSONBin.io)</p>
+                <p style={{ fontSize: 12, color: C.SLATE, marginBottom: 12, lineHeight: 1.5 }}>
+                  Optional: Damit alle Teammitglieder dieselben Daten sehen, erstelle einen kostenlosen Account auf{" "}
+                  <a href="https://jsonbin.io" target="_blank" style={{ color: C.RED }}>jsonbin.io</a>,
+                  dann einen neuen Bin. Trage hier dein Master-Key und die Bin-ID ein.<br />
+                  <strong>Ohne Eingabe:</strong> Daten bleiben nur auf diesem Gerät (localStorage).
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <label style={{ display: "block" }}>
+                    <span style={label}>JSONBin Master-Key</span>
+                    <input style={inp} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="$2a$10$..." />
+                  </label>
+                  <label style={{ display: "block" }}>
+                    <span style={label}>Bin-ID</span>
+                    <input style={inp} value={binId} onChange={e => setBinId(e.target.value)} placeholder="6849abc..." />
+                  </label>
+                </div>
+                {!apiKey && !binId && <p style={{ fontSize: 11, color: C.SLATE }}>⚠️ Kein JSONBin konfiguriert – Daten nur lokal gespeichert.</p>}
+                {apiKey && binId && <p style={{ fontSize: 11, color: "#3C6B2F" }}>✅ JSONBin konfiguriert – Daten geteilt im Team.</p>}
+              </div>
+
+              {/* Anthropic API Key */}
+              <div style={{ padding: 16, borderRadius: 8, border: `1px solid ${C.LINE}`, background: "#fff" }}>
+                <p style={{ fontWeight: 700, fontSize: 14, color: C.INK, marginBottom: 4 }}>🤖 PDF-Extraktion (Anthropic API)</p>
+                <p style={{ fontSize: 12, color: C.SLATE, marginBottom: 10, lineHeight: 1.5 }}>
+                  Für die automatische Vertragserkennung per PDF brauchst du einen Anthropic API-Key.
+                  Erhältlich auf <a href="https://console.anthropic.com" target="_blank" style={{ color: C.RED }}>console.anthropic.com</a>.
+                  Der Key wird nur auf deinem Gerät gespeichert.
+                </p>
+                <label style={{ display: "block" }}>
+                  <span style={label}>Anthropic API-Key</span>
+                  <input style={inp} type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-..." />
+                </label>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 12, padding: "0 24px" }}>
+              <button onClick={onClose} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: `1px solid ${C.LINE}`, background: "#fff", cursor: "pointer", fontSize: 14, color: C.SLATE }}>Abbrechen</button>
+              <button onClick={save} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: "none", background: saved ? "#3C6B2F" : C.INK, cursor: "pointer", fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}>
+                {saved ? "✓ Gespeichert" : "Speichern"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+
+// ─── Konstanten ───────────────────────────────────────────────────────────────
+const TIERS = ["Hauptsponsor", "Gold", "Silber", "Bronze", "Partner"];
+const PAY_STATUS = ["Bezahlt", "Ausstehend", "Überfällig"];
+const VERTRAGSTYPEN = ["Cash (CHF)", "WIR-Geld", "Barter (Sach-/Dienstleistung)"];
+const RICHTUNGEN = ["Einnahme", "Ausgabe"];
+const PIPELINE_STATUS = ["Erstkontakt", "Offerte erstellt", "Verhandlung", "Angebot angenommen", "Angebot abgelehnt", "Abgebrochen"];
+const PIPELINE_STATUS_ABGESCHLOSSEN = ["Angebot angenommen", "Angebot abgelehnt", "Abgebrochen"];
+const EHC_PERSONEN = ["Peter Rötheli", "Nicole Schmid", "Florian Kohler", "Carmine di Nardo", "Jürg Zingg"];
+
+const PIPE_CFG = {
+  "Erstkontakt":        { bg: "#EAF0FB", fg: "#2A5FC4", dot: "#4A7FE8" },
+  "Offerte erstellt":   { bg: "#FCEDD9", fg: "#9A5B00", dot: "#E0A100" },
+  "Verhandlung":        { bg: "#F3E8FB", fg: "#6B2FAB", dot: "#9B5DDB" },
+  "Angebot angenommen": { bg: "#E9EFE7", fg: "#3C6B2F", dot: "#5A9E44" },
+  "Angebot abgelehnt":  { bg: "#F8DEDE", fg: "#7E0E22", dot: "#C8112E" },
+  "Abgebrochen":        { bg: "#F0EDE4", fg: "#6B6A66", dot: "#A8A49A" },
+};
+
+const TYPE_CFG = {
+  "Cash (CHF)": { icon: Banknote, short: "Cash" },
+  "WIR-Geld": { icon: Coins, short: "WIR-Geld" },
+  "Barter (Sach-/Dienstleistung)": { icon: Package, short: "Barter" },
+};
+
+const C = {
+  INK: "#13131a", PAPER: "#F7F4EE", RED: "#C8112E", RED2: "#7E0E22",
+  LINE: "#E4DFD3", SLATE: "#6B6A66", LABEL: "#0E0E10",
+};
+
+// ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+function fmtCHF(n) {
+  return new Intl.NumberFormat("de-CH", { style: "currency", currency: "CHF", maximumFractionDigits: 0 }).format(Number(n) || 0);
+}
+
+function fmtDate(d) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function daysUntil(d) {
+  if (!d) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const end = new Date(d); end.setHours(0,0,0,0);
+  return Math.round((end - today) / 86400000);
+}
+
+function contractStatus(s) {
+  const days = daysUntil(s.vertragsende);
+  if (days === null) return { key: "unbekannt", label: "Kein Enddatum", tone: "neutral" };
+  if (days < 0) return { key: "abgelaufen", label: "Abgelaufen", tone: "danger" };
+  if (days <= 90) return { key: "laeuft_aus", label: `Läuft aus (${days} Tg.)`, tone: "warn" };
+  return { key: "aktiv", label: "Aktiv", tone: "ok" };
+}
+
+function effektiverWert(s) {
+  return (s.zahlungskomponenten || []).reduce((a, c) => a + (Number(c.betrag) || 0), 0);
+}
+function listenwert(s) {
+  return (s.werbeleistungen || []).reduce((a, w) => a + (Number(w.wert) || 0), 0);
+}
+function signedBetrag(c) {
+  const v = Number(c.betrag) || 0;
+  return c.richtung === "Ausgabe" ? -v : v;
+}
+function hasOverdue(s) {
+  return (s.zahlungskomponenten || []).some((c) => c.status === "Überfällig");
+}
+function matchesSearch(s, term) {
+  if (!term) return true;
+  const t = term.toLowerCase();
+  return s.name.toLowerCase().includes(t)
+    || (s.werbeleistungen || []).some((w) => w.name.toLowerCase().includes(t))
+    || (s.ehcLeistungen || "").toLowerCase().includes(t)
+    || (s.zahlungskomponenten || []).some((c) => (c.beschreibung || "").toLowerCase().includes(t));
+}
+
+function emptySponsor() {
+  return {
+    id: uid(), name: "", kategorie: "Gold",
+    vertragsbeginn: "", vertragsende: "", optionVerlaengerung: false,
+    werbeleistungen: [{ id: uid(), name: "", wert: "" }],
+    zahlungskomponenten: [{ id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: "", status: "Ausstehend", beschreibung: "" }],
+    ehcLeistungen: "", ansprechpartnerName: "", ansprechpartnerRolle: "",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "", internKontaktEHC: "", notizen: "",
+  };
+}
+
+function emptyLead() {
+  return {
+    id: uid(), firma: "", status: "Erstkontakt", internPerson: "",
+    offerten: [], // Array von {id, datum, beschreibung, wert} – neueste zuletzt
+    letzterKontakt: "", naechsteAktion: "", naechsteAktionDatum: "", notizen: "",
+  };
+}
+
+function emptyOfferte() {
+  return { id: uid(), datum: new Date().toISOString().slice(0, 10), beschreibung: "", wertCHF: "", wertBarter: "" };
+}
+
+// Migriert alte Offerten (einzelnes wert-Feld) ins neue zweigeteilte Format
+function migrateOfferte(o) {
+  if (o.wertCHF !== undefined || o.wertBarter !== undefined) return o;
+  return { ...o, wertCHF: o.wert || "", wertBarter: "", wert: undefined };
+}
+
+// Migriert alte Leads (offerte/offerteWert als Strings) ins neue Array-Format
+function migrateLead(l) {
+  const base = (() => {
+    if (Array.isArray(l.offerten)) return l;
+    const offerten = [];
+    if (l.offerte || l.offerteWert) {
+      offerten.push({ id: uid(), datum: l.letzterKontakt || new Date().toISOString().slice(0, 10), beschreibung: l.offerte || "", wertCHF: l.offerteWert || "", wertBarter: "" });
+    }
+    const { offerte, offerteWert, ...rest } = l;
+    return { ...rest, offerten };
+  })();
+  // Auch bestehende Offerten-Einträge auf wertCHF/wertBarter migrieren
+  return { ...base, offerten: (base.offerten || []).map(migrateOfferte) };
+}
+
+function aktuelleOfferte(lead) {
+  const offs = lead.offerten || [];
+  return offs.length > 0 ? offs[offs.length - 1] : null;
+}
+
+function emptyInteressent() {
+  return { id: uid(), firma: "", branche: "", kontaktName: "", kontaktRolle: "", kontaktEmail: "", kontaktTelefon: "", internPerson: "", potenzialCHF: "", potenzialBarter: "", notizen: "", erstelltAm: new Date().toISOString().slice(0, 10) };
+}
+
+// ─── Seed-Daten (aus hochgeladenen Verträgen) ─────────────────────────────────
+function zurichVersicherungSeed() {
+  return {
+    id: uid(), name: "Zürich Versicherungs-Gesellschaft AG", kategorie: "Silber",
+    vertragsbeginn: "2025-11-24", vertragsende: "2026-04-30", optionVerlaengerung: true,
+    werbeleistungen: [
+      { id: uid(), name: "Bullykreis Verteidigungsdrittel", wert: 30000 },
+      { id: uid(), name: "4m Bandenwerbung", wert: 12000 },
+      { id: uid(), name: "Business Club Gold", wert: 5000 },
+      { id: uid(), name: "Playoff-Event (30 Pers., Food)", wert: 2000 },
+    ],
+    zahlungskomponenten: [
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 15000, status: "Ausstehend", beschreibung: "Zahlbar 10 Tage nach Rechnungsstellung" },
+      { id: uid(), typ: "Barter (Sach-/Dienstleistung)", richtung: "Einnahme", betrag: 20000, status: "Ausstehend", beschreibung: "Prämienreduktion, beglichen über Marketingmassnahmen" },
+    ],
+    ehcLeistungen: "Aufnahme als Silber Partner, Verlinkung & Logo Homepage, Verdankung über Speaker Heimspiele, LED Präsenz Speakerdurchsagen, Logopräsenz Club Heft, Einladung Saisoneröffnung & Abschlussparty, Gold Club Mitgliedschaft Business Club, 2 Sitzplatzabonnemente, Freier Zutritt Red Line Lounge (2 Gäste), Exklusive Informationen Offizielle, Vergünstigung Zusatz-Saisonabo, Teilnahme monatliche Events, Nutzung RBC-Räumlichkeiten",
+    ansprechpartnerName: "Reto Boli", ansprechpartnerRolle: "Head Sponsoring & Live Marketing",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "",
+    internKontaktEHC: "Peter Rötheli, Florian Kohler",
+    notizen: "Spezialpreis CHF 35'000 exkl. MWST (Listenwert CHF 49'000). Bei Auf-/Abstieg Recht auf Neuverhandlung (Ziff. 6).",
+  };
+}
+
+function domoReisenSeed() {
+  return {
+    id: uid(), name: "Domo Reisen & Vertriebs AG", kategorie: "Gold",
+    vertragsbeginn: "2026-06-04", vertragsende: "2029-04-30", optionVerlaengerung: false,
+    werbeleistungen: [
+      { id: uid(), name: "Eisbalkenwerbung im Stadion", wert: "" },
+      { id: uid(), name: "Werbung Schulter links/rechts Auswärtsdress", wert: "" },
+      { id: uid(), name: "Präsentation Zuschauerzahl (alle Heimspiele)", wert: "" },
+      { id: uid(), name: "Zuschauerzahl-Spiel auf Facebook", wert: "" },
+      { id: uid(), name: "TV-Werbung Heimspiele (Clip + Drittelspausen)", wert: "" },
+      { id: uid(), name: "Logo-Einblendung TV bei Spielunterbrüchen", wert: "" },
+    ],
+    zahlungskomponenten: [
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 37500, status: "Ausstehend", beschreibung: "Sponsoringbetrag, zahlbar in 2 Tranchen per 30.08. und 28.02." },
+      { id: uid(), typ: "WIR-Geld", richtung: "Ausgabe", betrag: "", status: "Ausstehend", beschreibung: "75% der effektiven Carfahrten-Kosten – Betrag steht erst zum Saisonende fest." },
+      { id: uid(), typ: "Cash (CHF)", richtung: "Ausgabe", betrag: "", status: "Ausstehend", beschreibung: "25% der effektiven Carfahrten-Kosten – Betrag steht erst zum Saisonende fest." },
+    ],
+    ehcLeistungen: "Buchung der Busse für Auswärtsspiele, Aufnahme als Gold Partner, Verlinkung & Logo Homepage, Verdankung über Speaker Heimspiele, Logopräsenz Club Heft, Einladung Saisoneröffnung & Abschlussparty, 2 Sitzplatzabonnemente, Logo-Präsenz Mannschaftsposter, 1/4 Seite Inserat Matchprogramm (ganze Saison)",
+    ansprechpartnerName: "John Grob", ansprechpartnerRolle: "Product Manager",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "",
+    internKontaktEHC: "Peter Rötheli, Nicole Schmid",
+    notizen: "Sponsoringbetrag CHF 37'500 fliesst als Cash an EHC Chur. Carfahrten-Rückvergütung (75% WIR/25% Cash) nach Saisonende nachtragen. 3 Saisons (2026/27–2028/29).",
+  };
+}
+
+function nikisChurSeed() {
+  return {
+    id: uid(), name: "Niki's Chur AG", kategorie: "Bronze",
+    vertragsbeginn: "2026-06-03", vertragsende: "2027-04-30", optionVerlaengerung: false,
+    werbeleistungen: [
+      { id: uid(), name: "Banner (vorhanden von letzter Saison)", wert: 6000 },
+      { id: uid(), name: "1/4 Seite Inserat Matchprogramm", wert: 1500 },
+    ],
+    zahlungskomponenten: [
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 7500, status: "Ausstehend", beschreibung: "30 Tage nach Rechnungsstellung" },
+    ],
+    ehcLeistungen: "Aufnahme als Bronze Top Partner, Logo Präsenz Homepage, Verlinkung HP, Logopräsenz Club Heft (2x/Saison), Durchsage & Verdankung Speaker alle Heimspiele, Logo LED-Screens bei Durchsage, Einladung Saisoneröffnung & Abschlussparty",
+    ansprechpartnerName: "Karin Suter-Niggli", ansprechpartnerRolle: "Marketing & Kommunikation",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "",
+    internKontaktEHC: "Peter Rötheli, Nicole Schmid",
+    notizen: "Herstellungs-/Montagekosten zu Lasten EHC Chur (nicht des Partners). Bei Auf-/Abstieg Recht auf Neuverhandlung.",
+  };
+}
+
+function revisionsPartnerSeed() {
+  return {
+    id: uid(), name: "RevisionsPartner AG", kategorie: "Partner",
+    vertragsbeginn: "2026-06-17", vertragsende: "2027-04-30", optionVerlaengerung: false,
+    werbeleistungen: [{ id: uid(), name: "2 Meter Bandenwerbung", wert: 5000 }],
+    zahlungskomponenten: [
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 5000, status: "Ausstehend", beschreibung: "30 Tage nach Rechnungsstellung" },
+    ],
+    ehcLeistungen: "Werbung gemäss Ziffer 3",
+    ansprechpartnerName: "Nik Graf", ansprechpartnerRolle: "Partner",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "",
+    internKontaktEHC: "Peter Rötheli, Nicole Schmid",
+    notizen: "Auch unterzeichnet von Christoph Kalberer (Partner). Neuverhandlung Frühjahr 2027. Herstellungskosten zu Lasten EHC Chur.",
+  };
+}
+
+function rimussStradaSeed() {
+  return {
+    id: uid(), name: "Rimuss & Strada Wein AG", kategorie: "Gold",
+    vertragsbeginn: "2026-06-03", vertragsende: "2027-04-30", optionVerlaengerung: true,
+    werbeleistungen: [
+      { id: uid(), name: "Auswärts-Trikot 1. Mannschaft Brust rechts", wert: 15000 },
+      { id: uid(), name: "Goal Präsentator (erste 10 Spiele Saison 26/27)", wert: 6000 },
+    ],
+    zahlungskomponenten: [
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 15000, status: "Ausstehend", beschreibung: "30 Tage nach Rechnungsstellung" },
+      { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: 5000, status: "Ausstehend", beschreibung: "Fällig 28.02.2027" },
+    ],
+    ehcLeistungen: "Goal Präsentator Speaker-Durchsage, Nennung HP & Social Media Matchvorschau, 2 Tickets pro Tor-Präsentation, Logo LED-Screens, Aufnahme als Gold Partner, Verlinkung & Logo HP, Verdankung Speaker, Logopräsenz Club Heft, Einladung Saisoneröffnung & Abschlussparty, 2 Sitzplatzabonnemente, Logo Mannschaftsposter",
+    ansprechpartnerName: "Micha Davaz", ansprechpartnerRolle: "Mitglied der Geschäftsleitung / VRP",
+    ansprechpartnerEmail: "", ansprechpartnerTelefon: "",
+    internKontaktEHC: "Peter Rötheli, Nicole Schmid",
+    notizen: "Spezialpreis CHF 20'000 exkl. MWST (Listenwert CHF 21'000). Option auf Verlängerung, Gespräche anfangs 2027.",
+  };
+}
+
+const SEED_REGISTRY = [
+  { key: "zurich",            label: "Zürich Versicherung",   name: "Zürich Versicherungs-Gesellschaft AG", fn: zurichVersicherungSeed },
+  { key: "domo",              label: "Domo Reisen",           name: "Domo Reisen & Vertriebs AG",           fn: domoReisenSeed },
+  { key: "nikis",             label: "Niki's Chur",           name: "Niki's Chur AG",                       fn: nikisChurSeed },
+  { key: "revisionspartner",  label: "RevisionsPartner",      name: "RevisionsPartner AG",                  fn: revisionsPartnerSeed },
+  { key: "rimuss",            label: "Rimuss & Strada Wein",  name: "Rimuss & Strada Wein AG",              fn: rimussStradaSeed },
+];
+
+// ─── PDF → Formular (KI-Extraktion) ─────────────────────────────────────────
+async function extractSponsorFromPdf(file) {
+  const base64Data = await new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(",")[1]);
+    r.onerror = () => rej(new Error("Datei konnte nicht gelesen werden"));
+    r.readAsDataURL(file);
+  });
+
+  const systemPrompt = `Du liest EHC Chur Partnerverträge und extrahierst sie in ein striktes JSON-Format. Antworte NUR mit validem JSON, keine Backticks, kein Vortext.
+
+Format:
+{
+  "name": "Firmenname",
+  "kategorie": "Hauptsponsor"|"Gold"|"Silber"|"Bronze"|"Partner",
+  "vertragsbeginn": "YYYY-MM-DD",
+  "vertragsende": "YYYY-MM-DD (EHC-Verträge laufen bis 30.4. des Geschäftsjahres)",
+  "optionVerlaengerung": true/false,
+  "werbeleistungen": [{"name": "Bezeichnung aus Ziff. 3","wert": Zahl oder ""}],
+  "zahlungskomponenten": [{"typ":"Cash (CHF)"|"WIR-Geld"|"Barter (Sach-/Dienstleistung)","richtung":"Einnahme"|"Ausgabe","betrag": Zahl oder "","status":"Ausstehend","beschreibung":"Zahlungsfrist/Details"}],
+  "ehcLeistungen": "alle Leistungen aus Ziff. 7, kommagetrennt",
+  "ansprechpartnerName": "Name Partner-Kontaktperson",
+  "ansprechpartnerRolle": "Funktion",
+  "internKontaktEHC": "EHC-Kontaktpersonen kommagetrennt",
+  "notizen": "Besonderheiten und Unklarheiten die geprüft werden sollten"
+}
+
+Richtung: Einnahme = Partner zahlt an EHC. Ausgabe = EHC zahlt an Partner. Bei Unsicherheit in notizen vermerken. Zahlen ohne Tausendertrennzeichen (15000 statt 15'000).`;
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": (window.__ehcAnthropicKey || localStorage.getItem("ehc_anthropic_key") || "") },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages: [{ role: "user", content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } },
+        { type: "text", text: "Extrahiere diesen Partnervertrag ins vorgegebene JSON-Format." },
+      ]}],
+    }),
+  });
+
+  if (!resp.ok) throw new Error("API-Fehler");
+  const data = await resp.json();
+  const textBlock = (data.content || []).find((b) => b.type === "text");
+  if (!textBlock) throw new Error("Keine Antwort");
+  const p = JSON.parse(textBlock.text.replace(/```json|```/g, "").trim());
+
+  return {
+    id: uid(),
+    name: p.name || "",
+    kategorie: TIERS.includes(p.kategorie) ? p.kategorie : "Partner",
+    vertragsbeginn: p.vertragsbeginn || "",
+    vertragsende: p.vertragsende || "",
+    optionVerlaengerung: !!p.optionVerlaengerung,
+    werbeleistungen: Array.isArray(p.werbeleistungen) && p.werbeleistungen.length
+      ? p.werbeleistungen.map((w) => ({ id: uid(), name: w.name || "", wert: w.wert === "" ? "" : w.wert }))
+      : [{ id: uid(), name: "", wert: "" }],
+    zahlungskomponenten: Array.isArray(p.zahlungskomponenten) && p.zahlungskomponenten.length
+      ? p.zahlungskomponenten.map((c) => ({
+          id: uid(),
+          typ: VERTRAGSTYPEN.includes(c.typ) ? c.typ : "Cash (CHF)",
+          richtung: RICHTUNGEN.includes(c.richtung) ? c.richtung : "Einnahme",
+          betrag: c.betrag === "" ? "" : c.betrag,
+          status: PAY_STATUS.includes(c.status) ? c.status : "Ausstehend",
+          beschreibung: c.beschreibung || "",
+        }))
+      : [{ id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: "", status: "Ausstehend", beschreibung: "" }],
+    ehcLeistungen: p.ehcLeistungen || "",
+    ansprechpartnerName: p.ansprechpartnerName || "",
+    ansprechpartnerRolle: p.ansprechpartnerRolle || "",
+    ansprechpartnerEmail: "",
+    ansprechpartnerTelefon: "",
+    internKontaktEHC: p.internKontaktEHC || "",
+    notizen: (p.notizen ? p.notizen + " " : "") + "⚠️ Automatisch aus PDF extrahiert – bitte alle Angaben prüfen.",
+  };
+}
+
+// ─── UI-Bausteine ─────────────────────────────────────────────────────────────
+function Field({ label, children, hint }) {
+  return (
+    <label style={{ display: "block" }}>
+      <span style={{ display: "block", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, color: C.LABEL, fontFamily: "'Oswald', sans-serif", marginBottom: 5 }}>
+        {label}
+      </span>
+      {children}
+      {hint && <span style={{ display: "block", fontSize: 11, color: C.SLATE, marginTop: 3 }}>{hint}</span>}
+    </label>
+  );
+}
+
+const inpStyle = { width: "100%", background: "#fff", border: `1px solid ${C.LINE}`, borderRadius: 4, padding: "9px 11px", fontSize: 14, color: C.INK, outline: "none", boxSizing: "border-box" };
+const Inp = (props) => <input style={inpStyle} {...props} />;
+const Sel = ({ children, ...props }) => <select style={inpStyle} {...props}>{children}</select>;
+const Tex = (props) => <textarea style={{ ...inpStyle, resize: "vertical" }} {...props} />;
+
+function TierBadge({ tier }) {
+  const m = { Hauptsponsor: { bg: C.RED, border: C.RED, color: "#fff" }, Gold: { bg: "transparent", border: C.RED, color: C.INK }, Silber: { bg: "transparent", border: C.SLATE, color: C.INK }, Bronze: { bg: "transparent", border: C.SLATE, color: C.INK, dashed: true }, Partner: { bg: "transparent", border: C.LINE, color: C.INK, dashed: true } }[tier] || {};
+  return <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 9px", borderRadius: 3, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", fontFamily: "'Oswald', sans-serif", background: m.bg, border: `1.5px ${m.dashed ? "dashed" : "solid"} ${m.border}`, color: m.color }}>{tier}</span>;
+}
+
+function StatusPill({ status }) {
+  const t = { ok: { bg: "#E9EFE7", fg: "#3C6B2F", Icon: CheckCircle2 }, warn: { bg: "#FCEDD9", fg: "#9A5B00", Icon: Clock }, danger: { bg: "#F8DEDE", fg: C.RED2, Icon: AlertTriangle }, neutral: { bg: "#ECEAE3", fg: C.SLATE, Icon: Clock } }[status.tone];
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", borderRadius: 99, fontSize: 12, fontWeight: 500, background: t.bg, color: t.fg }}><t.Icon size={13} />{status.label}</span>;
+}
+
+function PipeBadge({ status }) {
+  const c = PIPE_CFG[status] || PIPE_CFG["Erstkontakt"];
+  return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 99, fontSize: 12, fontWeight: 500, background: c.bg, color: c.fg }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: c.dot, display: "inline-block" }} />{status}</span>;
+}
+
+function PayChip({ comp }) {
+  const Ic = (TYPE_CFG[comp.typ] || TYPE_CFG["Cash (CHF)"]).icon;
+  const isOut = comp.richtung === "Ausgabe";
+  const DirIc = isOut ? ArrowUpCircle : ArrowDownCircle;
+  const dirColor = isOut ? C.RED2 : "#3C6B2F";
+  const tone = { Bezahlt: { bg: "#E9EFE7", fg: "#3C6B2F" }, Ausstehend: { bg: "#FCEDD9", fg: "#9A5B00" }, "Überfällig": { bg: "#F8DEDE", fg: C.RED2 } }[comp.status] || {};
+  const isEmpty = comp.betrag === "" || comp.betrag === null || comp.betrag === undefined;
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0" }}>
+      <Ic size={14} style={{ color: C.SLATE, marginTop: 2 }} />
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: C.INK }}>{TYPE_CFG[comp.typ]?.short || comp.typ}</span>
+          {isEmpty ? <span style={{ fontSize: 13, color: C.SLATE }}>Betrag offen</span>
+            : <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 700, color: dirColor, fontFamily: "'Oswald', sans-serif" }}><DirIc size={13} />{isOut ? "− " : "+ "}{fmtCHF(comp.betrag)}</span>}
+          <span style={{ padding: "1px 8px", borderRadius: 99, fontSize: 11, fontWeight: 500, background: tone.bg, color: tone.fg }}>{comp.status}</span>
+          <span style={{ fontSize: 11, color: C.SLATE }}>{isOut ? "Ausgabe (von EHC)" : "Einnahme (an EHC)"}</span>
+        </div>
+        {comp.beschreibung && <p style={{ fontSize: 12, color: C.SLATE, marginTop: 2 }}>{comp.beschreibung}</p>}
+      </div>
+    </div>
+  );
+}
+
+function ScoreBox({ label, value, accent, neg }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", padding: "12px 20px" }}>
+      <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.16em", color: "rgba(247,244,238,0.55)", fontFamily: "'Oswald', sans-serif", marginBottom: 3 }}>{label}</span>
+      <span style={{ fontSize: 20, fontWeight: 600, fontFamily: "'Oswald', sans-serif", color: neg ? "#F08A8A" : (accent || C.PAPER), letterSpacing: "0.02em" }}>{value}</span>
+    </div>
+  );
+}
+
+// ─── Sponsor-Modal ────────────────────────────────────────────────────────────
+function SponsorModal({ initial, onSave, onClose }) {
+  const [form, setForm] = useState(initial);
+  const [extracting, setExtracting] = useState(false);
+  const [extractErr, setExtractErr] = useState("");
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const setCheck = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.checked }));
+
+  function updSpec(id, k, v) { setForm((f) => ({ ...f, werbeleistungen: f.werbeleistungen.map((w) => w.id === id ? { ...w, [k]: v } : w) })); }
+  function addSpec() { setForm((f) => ({ ...f, werbeleistungen: [...f.werbeleistungen, { id: uid(), name: "", wert: "" }] })); }
+  function rmSpec(id) { setForm((f) => ({ ...f, werbeleistungen: f.werbeleistungen.filter((w) => w.id !== id) })); }
+  function updComp(id, k, v) { setForm((f) => ({ ...f, zahlungskomponenten: f.zahlungskomponenten.map((c) => c.id === id ? { ...c, [k]: v } : c) })); }
+  function addComp() { setForm((f) => ({ ...f, zahlungskomponenten: [...f.zahlungskomponenten, { id: uid(), typ: "Cash (CHF)", richtung: "Einnahme", betrag: "", status: "Ausstehend", beschreibung: "" }] })); }
+  function rmComp(id) { setForm((f) => ({ ...f, zahlungskomponenten: f.zahlungskomponenten.filter((c) => c.id !== id) })); }
+
+  async function handlePdf(e) {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    if (file.type !== "application/pdf") { setExtractErr("Bitte eine PDF-Datei auswählen."); return; }
+    setExtracting(true); setExtractErr("");
+    try { setForm({ ...(await extractSponsorFromPdf(file)), id: form.id }); }
+    catch { setExtractErr("Konnte nicht gelesen werden – bitte manuell erfassen."); }
+    finally { setExtracting(false); }
+  }
+
+  const lw = form.werbeleistungen.reduce((a, w) => a + (Number(w.wert) || 0), 0);
+  const ew = form.zahlungskomponenten.reduce((a, c) => a + (Number(c.betrag) || 0), 0);
+
+  const overlay = { position: "fixed", inset: 0, zIndex: 50, overflowY: "auto", background: "rgba(0,0,0,0.5)" };
+  const panel = { width: "100%", maxWidth: 680, margin: "0 auto", background: C.PAPER, borderRadius: "12px 12px 0 0", borderTop: `4px solid ${C.RED}`, paddingBottom: 80 };
+  const section = { borderTop: `1px solid ${C.LINE}`, marginTop: 16, paddingTop: 16 };
+  const sectionTitle = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700, color: C.LABEL, fontFamily: "'Oswald', sans-serif", marginBottom: 10 };
+  const grid2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 };
+  const cardStyle = { border: `1px solid ${C.LINE}`, borderRadius: 6, padding: 12, background: "#fff", marginBottom: 8 };
+  const footer = { position: "fixed", bottom: 0, left: 0, right: 0, background: C.PAPER, borderTop: `1px solid ${C.LINE}`, padding: "12px 24px", display: "flex", gap: 12, zIndex: 51 };
+
+  return (
+    <div style={overlay}>
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 24px 12px", borderBottom: `1px solid ${C.LINE}`, background: C.PAPER }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: C.INK, fontFamily: "'Oswald', sans-serif", margin: 0 }}>
+            {initial.name ? "Sponsor bearbeiten" : "Neuer Sponsor"}
+          </h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE, padding: 4 }}><X size={20} /></button>
+        </div>
+
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* PDF-Upload */}
+          <div style={{ border: `1.5px dashed ${C.LINE}`, borderRadius: 8, padding: 16, background: "#fff" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <Sparkles size={15} style={{ color: C.RED2 }} />
+              <span style={{ fontWeight: 700, fontSize: 13, color: C.INK }}>Unterzeichneten Vertrag als PDF einlesen</span>
+            </div>
+            <p style={{ fontSize: 12, color: C.SLATE, marginBottom: 10 }}>Füllt die Felder automatisch aus – bitte danach alle Angaben prüfen.</p>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", border: `1px solid ${C.LINE}`, borderRadius: 5, cursor: extracting ? "default" : "pointer", background: extracting ? "#F0EDE4" : "#fff", fontSize: 13, fontWeight: 500, color: C.INK }}>
+              {extracting ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+              {extracting ? "Wird gelesen…" : "PDF auswählen"}
+              <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={handlePdf} disabled={extracting} />
+            </label>
+            {extractErr && <p style={{ fontSize: 12, color: C.RED2, marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={13} />{extractErr}</p>}
+          </div>
+
+          <Field label="Firma / Sponsorname"><Inp value={form.name} onChange={set("name")} placeholder="z. B. Zürich Versicherungs-Gesellschaft AG" /></Field>
+          <Field label="Kategorie"><Sel value={form.kategorie} onChange={set("kategorie")}>{TIERS.map((t) => <option key={t}>{t}</option>)}</Sel></Field>
+
+          <div style={grid2}>
+            <Field label="Vertragsbeginn"><Inp type="date" value={form.vertragsbeginn} onChange={set("vertragsbeginn")} /></Field>
+            <Field label="Vertragsende"><Inp type="date" value={form.vertragsende} onChange={set("vertragsende")} /></Field>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: C.INK, cursor: "pointer" }}>
+            <input type="checkbox" checked={form.optionVerlaengerung} onChange={setCheck("optionVerlaengerung")} />
+            Option auf Verlängerung zu gleichen Bedingungen
+          </label>
+
+          {/* Spezifikationen */}
+          <div style={section}>
+            <p style={sectionTitle}>Spezifikationen Werbeträger (Ziff. 3) — einzeln mit Preis</p>
+            {form.werbeleistungen.map((w, i) => (
+              <div key={w.id} style={cardStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: C.LABEL, fontFamily: "'Oswald', sans-serif" }}>Position {i + 1}</span>
+                  <button onClick={() => rmSpec(w.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE }}><X size={16} /></button>
+                </div>
+                <div style={grid2}>
+                  <Field label="Bezeichnung"><Inp placeholder="z. B. Bullykreis Verteidigungsdrittel" value={w.name} onChange={(e) => updSpec(w.id, "name", e.target.value)} /></Field>
+                  <Field label="Preis CHF (optional)"><Inp type="number" min="0" placeholder="0" value={w.wert} onChange={(e) => updSpec(w.id, "wert", e.target.value)} /></Field>
+                </div>
+              </div>
+            ))}
+            <button onClick={addSpec} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.RED2 }}><Plus size={14} />Position hinzufügen</button>
+            <p style={{ fontSize: 12, color: C.SLATE, marginTop: 8 }}>Listenwert: <strong style={{ color: C.INK }}>{lw > 0 ? fmtCHF(lw) : "keine Einzelpreise"}</strong></p>
+          </div>
+
+          {/* Zahlungskomponenten */}
+          <div style={section}>
+            <p style={sectionTitle}>Leistungen des Partners — Zahlung (Cash / WIR / Barter)</p>
+            {form.zahlungskomponenten.map((c, i) => (
+              <div key={c.id} style={cardStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: C.LABEL, fontFamily: "'Oswald', sans-serif" }}>Komponente {i + 1}</span>
+                  <button onClick={() => rmComp(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE }}><X size={16} /></button>
+                </div>
+                <div style={{ ...grid2, marginBottom: 10 }}>
+                  <Field label="Art"><Sel value={c.typ} onChange={(e) => updComp(c.id, "typ", e.target.value)}>{VERTRAGSTYPEN.map((t) => <option key={t}>{t}</option>)}</Sel></Field>
+                  <Field label="Richtung">
+                    <Sel value={c.richtung || "Einnahme"} onChange={(e) => updComp(c.id, "richtung", e.target.value)}>
+                      <option value="Einnahme">Einnahme (an EHC)</option>
+                      <option value="Ausgabe">Ausgabe (von EHC)</option>
+                    </Sel>
+                  </Field>
+                </div>
+                <div style={{ ...grid2, marginBottom: 10 }}>
+                  <Field label="Betrag CHF (leer = offen)"><Inp type="number" min="0" placeholder="0" value={c.betrag} onChange={(e) => updComp(c.id, "betrag", e.target.value)} /></Field>
+                  <Field label="Status"><Sel value={c.status} onChange={(e) => updComp(c.id, "status", e.target.value)}>{PAY_STATUS.map((s) => <option key={s}>{s}</option>)}</Sel></Field>
+                </div>
+                <Field label="Beschreibung (Zahlungsfrist, Details)"><Inp value={c.beschreibung} onChange={(e) => updComp(c.id, "beschreibung", e.target.value)} placeholder="z. B. 30 Tage nach Rechnungsstellung" /></Field>
+              </div>
+            ))}
+            <button onClick={addComp} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.RED2 }}><Plus size={14} />Komponente hinzufügen</button>
+            <p style={{ fontSize: 12, color: C.SLATE, marginTop: 8 }}>Effektiver Vertragswert: <strong style={{ color: C.INK }}>{fmtCHF(ew)}</strong>{lw > ew && lw > 0 ? ` · Rabatt ggü. Listenwert: ${fmtCHF(lw - ew)}` : ""}</p>
+          </div>
+
+          {/* EHC-Leistungen */}
+          <div style={section}>
+            <Field label="Leistungen des EHC Chur (Ziff. 7) — mit Komma trennen" hint="z. B. Aufnahme als Gold Partner, Logo Homepage, 2 Sitzplatzabo …">
+              <Tex rows={3} value={form.ehcLeistungen} onChange={set("ehcLeistungen")} />
+            </Field>
+          </div>
+
+          {/* Ansprechpartner */}
+          <div style={section}>
+            <p style={sectionTitle}>Ansprechpartner Partner</p>
+            <div style={{ ...grid2, marginBottom: 10 }}>
+              <Field label="Name"><Inp value={form.ansprechpartnerName} onChange={set("ansprechpartnerName")} placeholder="z. B. Karin Suter-Niggli" /></Field>
+              <Field label="Funktion"><Inp value={form.ansprechpartnerRolle} onChange={set("ansprechpartnerRolle")} placeholder="z. B. Marketing & Kommunikation" /></Field>
+            </div>
+            <div style={grid2}>
+              <Field label="E-Mail"><Inp value={form.ansprechpartnerEmail} onChange={set("ansprechpartnerEmail")} placeholder="name@firma.ch" /></Field>
+              <Field label="Telefon"><Inp value={form.ansprechpartnerTelefon} onChange={set("ansprechpartnerTelefon")} placeholder="079 000 00 00" /></Field>
+            </div>
+          </div>
+
+          <Field label="Interne Kontaktperson(en) EHC Chur">
+            <Inp value={form.internKontaktEHC} onChange={set("internKontaktEHC")} placeholder="z. B. Peter Rötheli, Nicole Schmid" />
+          </Field>
+          <Field label="Notizen (optional)"><Tex rows={2} value={form.notizen} onChange={set("notizen")} placeholder="Interne Bemerkungen…" /></Field>
+        </div>
+      </div>
+
+      <div style={footer}>
+        <button onClick={onClose} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: `1px solid ${C.LINE}`, background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 500, color: C.SLATE }}>Abbrechen</button>
+        <button onClick={() => onSave(form)} disabled={!form.name.trim()} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: "none", background: form.name.trim() ? C.INK : "#ccc", cursor: form.name.trim() ? "pointer" : "default", fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}>Speichern</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Lead-Modal (Pipeline) ────────────────────────────────────────────────────
+function LeadModal({ initial, onSave, onClose }) {
+  const migriert = migrateLead(initial);
+  const [form, setForm] = useState(migriert);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  function updOfferte(id, k, v) {
+    setForm((f) => ({ ...f, offerten: f.offerten.map((o) => o.id === id ? { ...o, [k]: v } : o) }));
+  }
+  function addOfferte() {
+    setForm((f) => ({ ...f, offerten: [...f.offerten, emptyOfferte()] }));
+  }
+  function rmOfferte(id) {
+    setForm((f) => ({ ...f, offerten: f.offerten.filter((o) => o.id !== id) }));
+  }
+
+  const section = { borderTop: `1px solid ${C.LINE}`, marginTop: 16, paddingTop: 16 };
+  const sectionTitle = { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700, color: C.LABEL, fontFamily: "'Oswald', sans-serif", marginBottom: 10 };
+  const grid2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 };
+  const overlay = { position: "fixed", inset: 0, zIndex: 50, overflowY: "auto", background: "rgba(0,0,0,0.5)" };
+  const panel = { width: "100%", maxWidth: 680, margin: "0 auto", background: C.PAPER, borderRadius: "12px 12px 0 0", borderTop: "4px solid #4A7FE8", paddingBottom: 80 };
+  const footer = { position: "fixed", bottom: 0, left: 0, right: 0, background: C.PAPER, borderTop: `1px solid ${C.LINE}`, padding: "12px 24px", display: "flex", gap: 12, zIndex: 51 };
+
+  const offs = form.offerten || [];
+  const hasHistory = offs.length > 1;
+
+  return (
+    <div style={overlay}>
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 24px 12px", borderBottom: `1px solid ${C.LINE}`, background: C.PAPER }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: C.INK, fontFamily: "'Oswald', sans-serif", margin: 0 }}>
+            {initial.firma ? "Verhandlung bearbeiten" : "Neue Verhandlung / Kontakt"}
+          </h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE }}><X size={20} /></button>
+        </div>
+
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+          <Field label="Firma / Unternehmen"><Inp value={form.firma} onChange={set("firma")} placeholder="z. B. Graubündner Kantonalbank" /></Field>
+          <div style={grid2}>
+            <Field label="Status">
+              <Sel value={form.status} onChange={set("status")}>{PIPELINE_STATUS.map((s) => <option key={s}>{s}</option>)}</Sel>
+            </Field>
+            <Field label="Zuständige Person (EHC intern)">
+              <Inp list="ehc-p" value={form.internPerson} onChange={set("internPerson")} placeholder="Person auswählen oder eingeben" />
+              <datalist id="ehc-p">{EHC_PERSONEN.map((p) => <option key={p} value={p} />)}</datalist>
+            </Field>
+          </div>
+
+          {/* Offerten-Historie */}
+          <div style={section}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <p style={{ ...sectionTitle, margin: 0 }}>Offerten-Verlauf</p>
+              <button onClick={addOfferte} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: `1px solid #4A7FE8`, borderRadius: 5, background: "#EAF0FB", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#2A5FC4" }}>
+                <Plus size={13} />Neue Offerten-Anpassung
+              </button>
+            </div>
+
+            {offs.length === 0 && (
+              <p style={{ fontSize: 13, color: C.SLATE, fontStyle: "italic" }}>Noch keine Offerte erfasst – klicke auf «Neue Offerten-Anpassung».</p>
+            )}
+
+            {offs.map((o, i) => {
+              const isCurrent = i === offs.length - 1;
+              const isOld = !isCurrent;
+              return (
+                <div key={o.id} style={{ borderRadius: 6, border: `1px solid ${isCurrent ? "#4A7FE8" : C.LINE}`, background: isCurrent ? "#F4F7FE" : "#FAFAF8", padding: 12, marginBottom: 10, position: "relative", opacity: isOld ? 0.8 : 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: isCurrent ? "#2A5FC4" : C.SLATE, fontFamily: "'Oswald', sans-serif" }}>
+                        {isCurrent ? "Aktuelle Offerte" : `Offerte ${i + 1} (überholt)`}
+                      </span>
+                      {isOld && <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: "#E0DDD6", color: C.SLATE }}>Durchgestrichen im Dashboard</span>}
+                    </div>
+                    {offs.length > 1 && (
+                      <button onClick={() => rmOfferte(o.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE, padding: 2 }} title="Offerte entfernen"><X size={15} /></button>
+                    )}
+                  </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <Field label="Datum der Offerte"><Inp type="date" value={o.datum} onChange={(e) => updOfferte(o.id, "datum", e.target.value)} /></Field>
+                  </div>
+                  <div style={{ ...grid2, marginBottom: 8 }}>
+                    <Field label="Wert CHF"><Inp type="number" min="0" placeholder="0" value={o.wertCHF} onChange={(e) => updOfferte(o.id, "wertCHF", e.target.value)} /></Field>
+                    <Field label="Wert Barter-Anteil CHF"><Inp type="number" min="0" placeholder="0" value={o.wertBarter} onChange={(e) => updOfferte(o.id, "wertBarter", e.target.value)} /></Field>
+                  </div>
+                  <Field label="Inhalt / Paket-Beschreibung">
+                    <Tex rows={isOld ? 2 : 3} value={o.beschreibung} onChange={(e) => updOfferte(o.id, "beschreibung", e.target.value)} placeholder="z. B. Gold-Paket: Bandenwerbung 4m, Business Club …" />
+                  </Field>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={section}>
+            <p style={sectionTitle}>Kontakt & Follow-up</p>
+            <div style={{ ...grid2, marginBottom: 12 }}>
+              <Field label="Letzter Kontakt"><Inp type="date" value={form.letzterKontakt} onChange={set("letzterKontakt")} /></Field>
+              <Field label="Nächste Aktion fällig am"><Inp type="date" value={form.naechsteAktionDatum} onChange={set("naechsteAktionDatum")} /></Field>
+            </div>
+            <Field label="Nächste Aktion (was ist geplant?)"><Inp value={form.naechsteAktion} onChange={set("naechsteAktion")} placeholder="z. B. Offerte nachfassen, Meeting vereinbaren …" /></Field>
+          </div>
+
+          <Field label="Notizen / Gesprächsprotokoll"><Tex rows={3} value={form.notizen} onChange={set("notizen")} placeholder="Gesprächsstand, Reaktion, interne Bemerkungen …" /></Field>
+        </div>
+      </div>
+      <div style={footer}>
+        <button onClick={onClose} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: `1px solid ${C.LINE}`, background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 500, color: C.SLATE }}>Abbrechen</button>
+        <button onClick={() => onSave(form)} disabled={!form.firma.trim()} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: "none", background: form.firma.trim() ? C.INK : "#ccc", cursor: form.firma.trim() ? "pointer" : "default", fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}>Speichern</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Interessenten-Modal ─────────────────────────────────────────────────────
+function InteressentModal({ initial, onSave, onClose }) {
+  const [form, setForm] = useState(initial);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const grid2 = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 };
+  const overlay = { position: "fixed", inset: 0, zIndex: 50, overflowY: "auto", background: "rgba(0,0,0,0.5)" };
+  const panel = { width: "100%", maxWidth: 600, margin: "0 auto", background: C.PAPER, borderRadius: "12px 12px 0 0", borderTop: "4px solid #E0A100", paddingBottom: 80 };
+  const footer = { position: "fixed", bottom: 0, left: 0, right: 0, background: C.PAPER, borderTop: `1px solid ${C.LINE}`, padding: "12px 24px", display: "flex", gap: 12, zIndex: 51 };
+  return (
+    <div style={overlay}>
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 24px 12px", borderBottom: `1px solid ${C.LINE}`, background: C.PAPER }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: C.INK, fontFamily: "'Oswald', sans-serif", margin: 0 }}>{initial.firma ? "Interessent bearbeiten" : "Neuer Interessent"}</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.SLATE }}><X size={20} /></button>
+        </div>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={grid2}>
+            <Field label="Firma / Unternehmen"><Inp value={form.firma} onChange={set("firma")} placeholder="z. B. Graubündner Kantonalbank" /></Field>
+            <Field label="Branche (optional)"><Inp value={form.branche} onChange={set("branche")} placeholder="z. B. Finanzdienstleistung" /></Field>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${C.LINE}`, paddingTop: 16 }}>
+            <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, color: C.LABEL, fontFamily: "'Oswald', sans-serif", marginBottom: 10 }}>Kontaktperson beim Partner</p>
+            <div style={{ ...grid2, marginBottom: 10 }}>
+              <Field label="Name"><Inp value={form.kontaktName} onChange={set("kontaktName")} placeholder="z. B. Hans Muster" /></Field>
+              <Field label="Funktion / Rolle"><Inp value={form.kontaktRolle} onChange={set("kontaktRolle")} placeholder="z. B. Marketingleiter" /></Field>
+            </div>
+            <div style={grid2}>
+              <Field label="E-Mail"><Inp value={form.kontaktEmail} onChange={set("kontaktEmail")} placeholder="hans.muster@firma.ch" /></Field>
+              <Field label="Telefon"><Inp value={form.kontaktTelefon} onChange={set("kontaktTelefon")} placeholder="079 000 00 00" /></Field>
+            </div>
+          </div>
+
+          <Field label="Zuständige Person (EHC intern)">
+            <Inp list="ehc-p2" value={form.internPerson} onChange={set("internPerson")} placeholder="Wer soll Kontakt aufnehmen?" />
+            <datalist id="ehc-p2">{EHC_PERSONEN.map((p) => <option key={p} value={p} />)}</datalist>
+          </Field>
+
+          <div style={{ borderTop: `1px solid ${C.LINE}`, paddingTop: 16 }}>
+            <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 700, color: C.LABEL, fontFamily: "'Oswald', sans-serif", marginBottom: 10 }}>Geschätztes Potenzial</p>
+            <div style={grid2}>
+              <Field label="Potenzial Cash CHF"><Inp type="number" min="0" placeholder="0" value={form.potenzialCHF} onChange={set("potenzialCHF")} /></Field>
+              <Field label="Potenzial Barter CHF"><Inp type="number" min="0" placeholder="0" value={form.potenzialBarter} onChange={set("potenzialBarter")} /></Field>
+            </div>
+          </div>
+
+          <Field label="Notizen / Warum interessant?"><Tex rows={3} value={form.notizen} onChange={set("notizen")} placeholder="z. B. Lokales KMU, grosses Budget, Regionalsponsoring-Affinität …" /></Field>
+        </div>
+      </div>
+      <div style={footer}>
+        <button onClick={onClose} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: `1px solid ${C.LINE}`, background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 500, color: C.SLATE }}>Abbrechen</button>
+        <button onClick={() => onSave(form)} disabled={!form.firma.trim()} style={{ flex: 1, padding: "10px 0", borderRadius: 5, border: "none", background: form.firma.trim() ? C.INK : "#ccc", cursor: form.firma.trim() ? "pointer" : "default", fontSize: 14, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}>Speichern</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Haupt-App ────────────────────────────────────────────────────────────────
+function App() {
+  const [sponsors, setSponsors] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [interessenten, setInteressenten] = useState([]);
+  const [tab, setTab] = useState("vertraege");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [modalSponsor, setModalSponsor] = useState(null);
+  const [modalLead, setModalLead] = useState(null);
+  const [search, setSearch] = useState("");
+  const [tierFilter, setTierFilter] = useState("Alle");
+  const [typeFilter, setTypeFilter] = useState("Alle");
+  const [statusFilter, setStatusFilter] = useState("Alle");
+  const [expanded, setExpanded] = useState({});
+  const [expandedLeads, setExpandedLeads] = useState({});
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [leadSearch, setLeadSearch] = useState("");
+  const [leadStatusF, setLeadStatusF] = useState("Alle");
+  const [leadPersonF, setLeadPersonF] = useState("Alle");
+  const [confirmDelLead, setConfirmDelLead] = useState(null);
+  const [modalInteressent, setModalInteressent] = useState(null);
+  const [confirmDelInt, setConfirmDelInt] = useState(null);
+  const [intSearch, setIntSearch] = useState("");
+  const [dismissed, setDismissed] = useState([]);
+  const [seedKey, setSeedKey] = useState(SEED_REGISTRY[0].key);
+
+  // ─ Laden ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      let list = [], dis = [], ls = [];
+      try {
+        const r = await AppStorage.get("appData");
+        const p = r ? JSON.parse(r.value) : null;
+        list = p?.sponsors || []; dis = p?.dismissedTemplates || []; ls = (p?.leads || []).map(migrateLead);
+        setInteressenten(p?.interessenten || []);
+      } catch {
+        try { const lsVal = localStorage.getItem("ehc_sponsors"); list = lsVal ? JSON.parse(lsVal) : []; } catch { list = []; }
+      }
+      setDismissed(dis); setLeads(ls);
+      const missing = SEED_REGISTRY.filter((e) => !dis.includes(e.name)).map((e) => e.fn()).filter((s) => !list.some((x) => x.name === s.name));
+      const merged = missing.length > 0 ? [...list, ...missing] : list;
+      setSponsors(merged);
+      if (missing.length > 0) { try { await AppStorage.set("appData", JSON.stringify({ sponsors: merged, dismissedTemplates: dis, leads: ls })); } catch {} }
+      setLoading(false);
+    })();
+  }, []);
+
+  async function persist(nextS, nextDis, nextL, nextInt) {
+    const d = nextDis !== undefined ? nextDis : dismissed;
+    const l = nextL !== undefined ? nextL : leads;
+    const ints = nextInt !== undefined ? nextInt : interessenten;
+    setSponsors(nextS);
+    if (nextDis !== undefined) setDismissed(nextDis);
+    if (nextL !== undefined) setLeads(nextL);
+    if (nextInt !== undefined) setInteressenten(nextInt);
+    setSaving(true);
+    try { await AppStorage.set("appData", JSON.stringify({ sponsors: nextS, dismissedTemplates: d, leads: l, interessenten: ints })); }
+    catch {} finally { setSaving(false); }
+  }
+
+  function saveSponsor(form) {
+    const ex = sponsors.some((s) => s.id === form.id);
+    persist(ex ? sponsors.map((s) => s.id === form.id ? form : s) : [...sponsors, form]);
+    setModalSponsor(null);
+  }
+  function delSponsor(id) {
+    const t = sponsors.find((s) => s.id === id);
+    const nd = t && SEED_REGISTRY.some((e) => e.name === t.name) && !dismissed.includes(t.name) ? [...dismissed, t.name] : undefined;
+    persist(sponsors.filter((s) => s.id !== id), nd);
+    setConfirmDel(null);
+  }
+  function saveLead(form) {
+    const ex = leads.some((l) => l.id === form.id);
+    persist(sponsors, undefined, ex ? leads.map((l) => l.id === form.id ? form : l) : [...leads, form]);
+    setModalLead(null);
+  }
+  function delLead(id) {
+    persist(sponsors, undefined, leads.filter((l) => l.id !== id));
+    setConfirmDelLead(null);
+  }
+  function saveInteressent(form) {
+    const ex = interessenten.some((i) => i.id === form.id);
+    persist(sponsors, undefined, undefined, ex ? interessenten.map((i) => i.id === form.id ? form : i) : [...interessenten, form]);
+    setModalInteressent(null);
+  }
+  function delInteressent(id) {
+    persist(sponsors, undefined, undefined, interessenten.filter((i) => i.id !== id));
+    setConfirmDelInt(null);
+  }
+  function interessentToLead(int) {
+    const newLead = { ...emptyLead(), firma: int.firma, internPerson: int.internPerson, ansprechpartnerName: int.kontaktName || "", ansprechpartnerRolle: int.kontaktRolle || "", ansprechpartnerEmail: int.kontaktEmail || "", ansprechpartnerTelefon: int.kontaktTelefon || "", notizen: int.notizen, offerten: int.potenzialCHF || int.potenzialBarter ? [{ ...emptyOfferte(), wertCHF: int.potenzialCHF || "", wertBarter: int.potenzialBarter || "", beschreibung: "Erstofferte (aus Lead-Liste)" }] : [] };
+    persist(sponsors, undefined, [...leads, newLead], interessenten.filter((i) => i.id !== int.id));
+    setTab("pipeline");
+  }
+
+  function leadToInteressent(lead) {
+    const currOff = aktuelleOfferte(lead);
+    const newInt = { ...emptyInteressent(), firma: lead.firma, internPerson: lead.internPerson, kontaktName: lead.ansprechpartnerName || "", kontaktRolle: lead.ansprechpartnerRolle || "", kontaktEmail: lead.ansprechpartnerEmail || "", kontaktTelefon: lead.ansprechpartnerTelefon || "", potenzialCHF: currOff?.wertCHF || "", potenzialBarter: currOff?.wertBarter || "", notizen: lead.notizen };
+    persist(sponsors, undefined, leads.filter((l) => l.id !== lead.id), [...interessenten, newInt]);
+  }
+
+  // ─ Stats & Filter ──────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const active = sponsors.filter((s) => contractStatus(s).key !== "abgelaufen");
+    const sumT = (typ) => active.reduce((s, sp) => s + (sp.zahlungskomponenten || []).filter((c) => c.typ === typ).reduce((a, c) => a + signedBetrag(c), 0), 0);
+    return { activeCount: active.length, cash: sumT("Cash (CHF)"), wir: sumT("WIR-Geld"), barter: sumT("Barter (Sach-/Dienstleistung)"), expiring: sponsors.filter((s) => contractStatus(s).key === "laeuft_aus").length, overdue: sponsors.filter(hasOverdue).length };
+  }, [sponsors]);
+
+  const donutData = useMemo(() => {
+    const by = {};
+    sponsors.filter((s) => contractStatus(s).key !== "abgelaufen").forEach((s) => { by[s.kategorie] = (by[s.kategorie] || 0) + effektiverWert(s); });
+    return Object.entries(by).map(([name, value]) => ({ name, value }));
+  }, [sponsors]);
+
+  const filtered = useMemo(() => sponsors
+    .filter((s) => tierFilter === "Alle" || s.kategorie === tierFilter)
+    .filter((s) => typeFilter === "Alle" || (s.zahlungskomponenten || []).some((c) => c.typ === typeFilter))
+    .filter((s) => { if (statusFilter === "Alle") return true; if (statusFilter === "ueberfaellig") return hasOverdue(s); return contractStatus(s).key === statusFilter; })
+    .filter((s) => matchesSearch(s, search))
+    .sort((a, b) => (daysUntil(a.vertragsende) ?? 9999) - (daysUntil(b.vertragsende) ?? 9999))
+  , [sponsors, tierFilter, typeFilter, statusFilter, search]);
+
+  const pipePersonen = useMemo(() => [...new Set(leads.map((l) => l.internPerson).filter(Boolean))].sort(), [leads]);
+  const filteredLeads = useMemo(() => leads
+    .filter((l) => {
+      if (leadStatusF === "Alle") return true;
+      if (leadStatusF === "__aktiv__") return !PIPELINE_STATUS_ABGESCHLOSSEN.includes(l.status);
+      if (leadStatusF === "__abgeschlossen__") return PIPELINE_STATUS_ABGESCHLOSSEN.includes(l.status);
+      return l.status === leadStatusF;
+    })
+    .filter((l) => leadPersonF === "Alle" || l.internPerson === leadPersonF)
+    .filter((l) => !leadSearch || l.firma.toLowerCase().includes(leadSearch.toLowerCase()) || (l.offerten || []).some((o) => (o.beschreibung || "").toLowerCase().includes(leadSearch.toLowerCase())) || (l.notizen || "").toLowerCase().includes(leadSearch.toLowerCase()))
+    .sort((a, b) => {
+      // Abgeschlossene ans Ende
+      const aA = PIPELINE_STATUS_ABGESCHLOSSEN.includes(a.status);
+      const bA = PIPELINE_STATUS_ABGESCHLOSSEN.includes(b.status);
+      if (aA !== bA) return aA ? 1 : -1;
+      if (!a.naechsteAktionDatum && !b.naechsteAktionDatum) return 0;
+      if (!a.naechsteAktionDatum) return 1;
+      if (!b.naechsteAktionDatum) return -1;
+      return a.naechsteAktionDatum.localeCompare(b.naechsteAktionDatum);
+    })
+  , [leads, leadStatusF, leadPersonF, leadSearch]);
+
+  const pipeStats = useMemo(() => {
+    const ak = leads.filter((l) => !PIPELINE_STATUS_ABGESCHLOSSEN.includes(l.status));
+    return {
+      aktiv: ak.length,
+      potenzialCHF: ak.reduce((s, l) => { const o = aktuelleOfferte(l); return s + (Number(o?.wertCHF) || 0); }, 0),
+      potenzialBarter: ak.reduce((s, l) => { const o = aktuelleOfferte(l); return s + (Number(o?.wertBarter) || 0); }, 0),
+      faellig: leads.filter((l) => l.naechsteAktionDatum && !PIPELINE_STATUS_ABGESCHLOSSEN.includes(l.status) && daysUntil(l.naechsteAktionDatum) <= 7).length,
+      angenommen: leads.filter((l) => l.status === "Angebot angenommen").length,
+      abgelehnt: leads.filter((l) => l.status === "Angebot abgelehnt").length,
+    };
+  }, [leads]);
+
+  const availableSeeds = SEED_REGISTRY.filter((e) => !dismissed.includes(e.name) && !sponsors.some((s) => s.name === e.name));
+  const donutColors = { Hauptsponsor: C.RED, Gold: "#8E1226", Silber: C.SLATE, Bronze: "#9C9686", Partner: "#C9C3B4" };
+
+  if (loading) return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: C.PAPER }}><Loader2 className="animate-spin" style={{ color: C.RED }} /></div>;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.PAPER, fontFamily: "'Inter', sans-serif" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap'); * { box-sizing: border-box; } input[type=number]::-webkit-inner-spin-button { opacity: 1; } ::placeholder { color: #B4AEA0; } .animate-spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
+      {/* Header */}
+      <header style={{ background: `linear-gradient(180deg, ${C.INK} 0%, #1c1c22 100%)`, color: "#fff" }}>
+        <div style={{ maxWidth: 1152, margin: "0 auto", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 4, background: C.RED, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13, fontFamily: "'Oswald', sans-serif" }}>EHC</div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.04em" }}>CHUR · SPONSORING</div>
+              <div style={{ fontSize: 11, color: "rgba(247,244,238,0.5)" }}>Partnerschafts-Übersicht{saving ? " · speichert…" : ""}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setEditMode((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, padding: "6px 14px", borderRadius: 99, border: "1px solid rgba(247,244,238,0.25)", color: editMode ? "#fff" : "rgba(247,244,238,0.7)", background: editMode ? C.RED : "transparent", cursor: "pointer" }}>
+              {editMode ? <Unlock size={13} /> : <Lock size={13} />}{editMode ? "Bearbeitungsmodus" : "Nur ansehen"}
+            </button>
+            {props.onSettingsClick && <button onClick={props.onSettingsClick} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 500, padding: "6px 12px", borderRadius: 99, border: "1px solid rgba(247,244,238,0.25)", color: "rgba(247,244,238,0.7)", background: "transparent", cursor: "pointer" }} title="Einstellungen (Speicher, API-Key)">⚙️</button>}
+          </div>
+        </div>
+        <div style={{ maxWidth: 1152, margin: "0 auto", padding: "0 8px", display: "flex", flexWrap: "wrap", borderTop: "1px solid rgba(247,244,238,0.12)" }}>
+          <ScoreBox label="Aktive Sponsoren" value={stats.activeCount} />
+          <ScoreBox label="Cash netto / Jahr" value={fmtCHF(stats.cash)} neg={stats.cash < 0} />
+          <ScoreBox label="WIR-Geld netto / Jahr" value={fmtCHF(stats.wir)} neg={stats.wir < 0} />
+          <ScoreBox label="Barter netto / Jahr" value={fmtCHF(stats.barter)} neg={stats.barter < 0} />
+          <ScoreBox label="Laufen in 90 Tg. aus" value={stats.expiring} accent={stats.expiring > 0 ? "#F4B860" : null} />
+          <ScoreBox label="Überfällig" value={stats.overdue} accent={stats.overdue > 0 ? "#F08A8A" : null} />
+        </div>
+      </header>
+
+      <main style={{ maxWidth: 1152, margin: "0 auto", padding: "24px" }}>
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${C.LINE}`, marginBottom: 24 }}>
+          {[{ key: "vertraege", label: "Verträge", Icon: FileSignature }, { key: "pipeline", label: "Verhandlungen / Pipeline", Icon: TrendingUp }].map(({ key, label, Icon }) => (
+            <button key={key} onClick={() => setTab(key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 16px", fontSize: 13, fontWeight: 700, fontFamily: "'Oswald', sans-serif", letterSpacing: "0.04em", background: "none", border: "none", borderBottom: `2px solid ${tab === key ? C.RED : "transparent"}`, marginBottom: -1, cursor: "pointer", color: tab === key ? C.RED : C.SLATE }}>
+              <Icon size={15} />{label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── VERTRÄGE ── */}
+        {tab === "vertraege" && (
+          <>
+            {/* Filter */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+              <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
+                <Search size={15} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.SLATE }} />
+                <input style={{ ...inpStyle, paddingLeft: 34 }} placeholder="Sponsor, Spezifikation oder Leistung suchen…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              <Sel style={{ ...inpStyle, width: "auto" }} value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}><option>Alle</option>{TIERS.map((t) => <option key={t}>{t}</option>)}</Sel>
+              <Sel style={{ ...inpStyle, width: "auto" }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="Alle">Alle Zahlungsarten</option>{VERTRAGSTYPEN.map((t) => <option key={t} value={t}>{t}</option>)}</Sel>
+              <Sel style={{ ...inpStyle, width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option value="Alle">Alle Status</option><option value="aktiv">Aktiv</option><option value="laeuft_aus">Läuft aus</option><option value="abgelaufen">Abgelaufen</option><option value="ueberfaellig">Zahlung überfällig</option></Sel>
+              {editMode && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  {availableSeeds.length > 0 && <>
+                    <Sel style={{ ...inpStyle, width: "auto" }} value={seedKey} onChange={(e) => setSeedKey(e.target.value)}>{availableSeeds.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}</Sel>
+                    <button onClick={() => { const e = availableSeeds.find((x) => x.key === seedKey) || availableSeeds[0]; if (e) setModalSponsor(e.fn()); }} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.INK }}><FileSignature size={14} />Vorlage übernehmen</button>
+                  </>}
+                  <button onClick={() => setModalSponsor(emptySponsor())} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", border: "none", borderRadius: 5, background: C.RED, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}><Plus size={16} />Sponsor erfassen</button>
+                </div>
+              )}
+            </div>
+
+            {/* Grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: 24 }}>
+              <div>
+                {filtered.length === 0 && (
+                  <div style={{ border: `1px solid ${C.LINE}`, borderRadius: 8, padding: "40px 24px", textAlign: "center", background: "#fff" }}>
+                    <p style={{ fontWeight: 600, color: C.INK, margin: "0 0 6px" }}>{sponsors.length === 0 ? "Noch keine Sponsoren erfasst" : "Keine Treffer"}</p>
+                    <p style={{ fontSize: 14, color: C.SLATE, margin: 0 }}>{sponsors.length === 0 ? "Aktiviere den Bearbeitungsmodus und erfasse den ersten Partner." : "Suche oder Filter anpassen."}</p>
+                  </div>
+                )}
+                {filtered.map((s) => {
+                  const st = contractStatus(s);
+                  const ew = effektiverWert(s);
+                  const lw = listenwert(s);
+                  const open = !!expanded[s.id];
+                  const borderL = st.tone === "danger" ? C.RED : st.tone === "warn" ? "#E0A100" : C.INK;
+                  return (
+                    <div key={s.id} style={{ background: "#fff", borderRadius: 8, border: `1px solid ${C.LINE}`, borderLeft: `4px solid ${borderL}`, marginBottom: 12, overflow: "hidden" }}>
+                      <button onClick={() => setExpanded((e) => ({ ...e, [s.id]: !e[s.id] }))} style={{ width: "100%", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "16px 18px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          {open ? <ChevronDown size={16} style={{ color: C.SLATE, marginTop: 3, flexShrink: 0 }} /> : <ChevronRight size={16} style={{ color: C.SLATE, marginTop: 3, flexShrink: 0 }} />}
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                              <span style={{ fontWeight: 700, fontSize: 15, color: C.INK }}>{s.name}</span>
+                              <TierBadge tier={s.kategorie} />
+                            </div>
+                            <StatusPill status={st} />
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: C.INK, fontSize: 16 }}>{fmtCHF(ew)}</div>
+                          <div style={{ fontSize: 11, color: C.SLATE }}>{lw > ew && lw > 0 ? `effektiv · Listenwert ${fmtCHF(lw)}` : "effektiv / Jahr"}</div>
+                        </div>
+                      </button>
+
+                      {open && (
+                        <div style={{ padding: "0 18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, paddingTop: 12, borderTop: `1px solid ${C.LINE}` }}>
+                            <div>
+                              <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 3 }}>Laufzeit</p>
+                              <p style={{ fontSize: 13, color: C.INK, margin: 0 }}>{fmtDate(s.vertragsbeginn)} – {fmtDate(s.vertragsende)}</p>
+                              {s.optionVerlaengerung && <p style={{ fontSize: 12, color: C.SLATE, margin: "2px 0 0" }}>Option auf Verlängerung</p>}
+                            </div>
+                            <div>
+                              <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 3 }}>Ansprechpartner</p>
+                              <p style={{ fontSize: 13, color: C.INK, margin: 0 }}>{s.ansprechpartnerName || "—"}{s.ansprechpartnerRolle ? ` · ${s.ansprechpartnerRolle}` : ""}</p>
+                              <div style={{ display: "flex", gap: 12, marginTop: 2 }}>
+                                {s.ansprechpartnerEmail && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 4 }}><Mail size={11} />{s.ansprechpartnerEmail}</span>}
+                                {s.ansprechpartnerTelefon && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 4 }}><Phone size={11} />{s.ansprechpartnerTelefon}</span>}
+                              </div>
+                            </div>
+                          </div>
+
+                          {(s.werbeleistungen || []).some((w) => w.name) && (
+                            <div style={{ paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                              <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 6 }}>Spezifikationen Werbeträger</p>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                {s.werbeleistungen.filter((w) => w.name).map((w) => (
+                                  <span key={w.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 4, fontSize: 11, background: "#F0EDE4", color: C.INK }}>
+                                    <Tag size={10} />{w.name}{Number(w.wert) > 0 ? ` · ${fmtCHF(w.wert)}` : ""}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {(s.zahlungskomponenten || []).length > 0 && (
+                            <div style={{ paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                              <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 4 }}>Zahlung des Partners</p>
+                              {s.zahlungskomponenten.map((c) => <PayChip key={c.id} comp={c} />)}
+                            </div>
+                          )}
+
+                          {s.ehcLeistungen && (
+                            <div style={{ paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                              <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 6 }}>Leistungen EHC Chur</p>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                                {s.ehcLeistungen.split(",").filter((g) => g.trim()).map((g, i) => (
+                                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: 4, fontSize: 11, background: "#EFEAE0", color: C.INK }}><Tag size={10} />{g.trim()}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {s.internKontaktEHC && <p style={{ fontSize: 12, color: C.SLATE, margin: 0 }}>Intern zuständig: {s.internKontaktEHC}</p>}
+                          {s.notizen && <p style={{ fontSize: 13, fontStyle: "italic", color: C.SLATE, margin: 0 }}>{s.notizen}</p>}
+
+                          {editMode && (
+                            <div style={{ display: "flex", gap: 8, paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                              <button onClick={() => setModalSponsor(s)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.INK }}><Pencil size={13} />Bearbeiten</button>
+                              {confirmDel === s.id
+                                ? <><button onClick={() => delSponsor(s.id)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: C.RED2, cursor: "pointer", fontSize: 13, fontWeight: 500, color: "#fff" }}>Wirklich löschen</button><button onClick={() => setConfirmDel(null)} style={{ padding: "6px 12px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: C.SLATE }}>Abbrechen</button></>
+                                : <button onClick={() => setConfirmDel(s.id)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.RED2 }}><Trash2 size={13} />Löschen</button>
+                              }
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Sidebar */}
+              <aside>
+                <div style={{ border: `1px solid ${C.LINE}`, borderRadius: 8, padding: 16, background: "#fff", marginBottom: 12 }}>
+                  <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 8 }}>Wert nach Kategorie</p>
+                  {donutData.length === 0 ? <p style={{ fontSize: 14, color: C.SLATE, textAlign: "center", padding: "32px 0" }}>Keine Daten</p> : (
+                    <div style={{ height: 220 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart><Pie data={donutData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>{donutData.map((d, i) => <Cell key={i} fill={donutColors[d.name] || C.SLATE} />)}</Pie><Tooltip formatter={(v) => fmtCHF(v)} /><Legend wrapperStyle={{ fontSize: 12 }} /></PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+                <div style={{ borderRadius: 8, padding: 14, background: "#EFEAE0", fontSize: 12, lineHeight: 1.6, color: C.SLATE }}>
+                  Cash/WIR/Barter sind <strong>netto</strong>: Einnahmen minus Ausgaben des EHC Chur. Der Bearbeitungsmodus-Schalter ist eine lokale Ansichtssteuerung, kein Login.
+                </div>
+              </aside>
+            </div>
+          </>
+        )}
+
+        {/* ── PIPELINE ── */}
+        {tab === "pipeline" && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 20 }}>
+              {[
+                { label: "Aktive Verhandlungen", value: pipeStats.aktiv, color: "#2A5FC4" },
+                { label: "Potenzial CHF", value: fmtCHF(pipeStats.potenzialCHF), color: C.INK },
+                { label: "Potenzial Barter", value: fmtCHF(pipeStats.potenzialBarter), color: "#6B2FAB" },
+                { label: "Follow-up fällig (7 Tg.)", value: pipeStats.faellig, color: pipeStats.faellig > 0 ? C.RED : C.INK },
+                { label: "Angebote angenommen", value: pipeStats.angenommen, color: "#3C6B2F" },
+                { label: "Angebote abgelehnt", value: pipeStats.abgelehnt, color: pipeStats.abgelehnt > 0 ? C.RED2 : C.INK },
+              ].map((s) => (
+                <div key={s.label} style={{ borderRadius: 8, padding: "12px 14px", background: "#fff", border: `1px solid ${C.LINE}` }}>
+                  <p style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", margin: "0 0 4px" }}>{s.label}</p>
+                  <p style={{ fontSize: 18, fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: s.color, margin: 0 }}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Filter */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
+              <div style={{ position: "relative", flex: 1, minWidth: 160 }}>
+                <Search size={15} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.SLATE }} />
+                <input style={{ ...inpStyle, paddingLeft: 34 }} placeholder="Firma, Offerte oder Notizen suchen…" value={leadSearch} onChange={(e) => setLeadSearch(e.target.value)} />
+              </div>
+              <Sel style={{ ...inpStyle, width: "auto" }} value={leadStatusF} onChange={(e) => setLeadStatusF(e.target.value)}>
+                <option value="Alle">Alle Status</option>
+                <option value="__aktiv__">── Aktive ──</option>
+                {PIPELINE_STATUS.filter((s) => !PIPELINE_STATUS_ABGESCHLOSSEN.includes(s)).map((s) => <option key={s}>{s}</option>)}
+                <option value="__abgeschlossen__">── Abgeschlossene ──</option>
+                {PIPELINE_STATUS_ABGESCHLOSSEN.map((s) => <option key={s}>{s}</option>)}
+              </Sel>
+              {pipePersonen.length > 0 && <Sel style={{ ...inpStyle, width: "auto" }} value={leadPersonF} onChange={(e) => setLeadPersonF(e.target.value)}><option value="Alle">Alle Personen</option>{pipePersonen.map((p) => <option key={p}>{p}</option>)}</Sel>}
+              {editMode && <button onClick={() => setModalLead(emptyLead())} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", border: "none", borderRadius: 5, background: C.RED, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}><Plus size={16} />Verhandlung erfassen</button>}
+            </div>
+
+
+            {filteredLeads.map((l) => {
+              const cfg = PIPE_CFG[l.status] || PIPE_CFG["Erstkontakt"];
+              const dN = l.naechsteAktionDatum ? daysUntil(l.naechsteAktionDatum) : null;
+              const urgent = dN !== null && dN <= 7;
+              const isOpen = !!expandedLeads[l.id];
+              const isAbgeschlossen = PIPELINE_STATUS_ABGESCHLOSSEN.includes(l.status);
+              const offs = l.offerten || [];
+              const currOff = aktuelleOfferte(l);
+              return (
+                <div key={l.id} style={{ background: "#fff", borderRadius: 8, border: `1px solid ${C.LINE}`, borderLeft: `4px solid ${cfg.dot}`, marginBottom: 12, overflow: "hidden" }}>
+                  {/* Kopfzeile – immer sichtbar, klickbar */}
+                  <button onClick={() => setExpandedLeads((e) => ({ ...e, [l.id]: !e[l.id] }))} style={{ width: "100%", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "14px 18px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      {isOpen ? <ChevronDown size={16} style={{ color: C.SLATE, marginTop: 3, flexShrink: 0 }} /> : <ChevronRight size={16} style={{ color: C.SLATE, marginTop: 3, flexShrink: 0 }} />}
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: C.INK, marginBottom: 6 }}>{l.firma}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <PipeBadge status={l.status} />
+                          {l.internPerson && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 5 }}><User size={12} />{l.internPerson}</span>}
+                          {offs.length > 1 && <span style={{ fontSize: 11, color: C.SLATE, background: "#F0EDE4", padding: "1px 7px", borderRadius: 99 }}>{offs.length} Offerten</span>}
+                          {urgent && !isAbgeschlossen && <span style={{ fontSize: 11, fontWeight: 600, color: C.RED2, background: "#F8DEDE", padding: "2px 8px", borderRadius: 99 }}>Follow-up {dN === 0 ? "heute" : dN < 0 ? "überfällig" : `in ${dN} Tg.`}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    {currOff && (Number(currOff.wertCHF) > 0 || Number(currOff.wertBarter) > 0) && (
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        {Number(currOff.wertCHF) > 0 && <div style={{ fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: C.INK, fontSize: 15 }}>{fmtCHF(currOff.wertCHF)} Cash</div>}
+                        {Number(currOff.wertBarter) > 0 && <div style={{ fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: "#6B2FAB", fontSize: 15 }}>{fmtCHF(currOff.wertBarter)} Barter</div>}
+                        <div style={{ fontSize: 11, color: C.SLATE }}>aktuelle Offerte</div>
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Detail – nur bei aufgeklappter Karte */}
+                  {isOpen && (
+                    <div style={{ padding: "0 18px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                      {/* Offerten-Verlauf */}
+                      {offs.length > 0 && (
+                        <div style={{ paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                          <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 8 }}>Offerten-Verlauf</p>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {offs.map((o, i) => {
+                              const isCurrent = i === offs.length - 1;
+                              return (
+                                <div key={o.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", opacity: isCurrent ? 1 : 0.6 }}>
+                                  <div style={{ width: 3, borderRadius: 2, background: isCurrent ? "#4A7FE8" : C.LINE, alignSelf: "stretch", flexShrink: 0, marginTop: 3 }} />
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
+                                      <span style={{ fontSize: 11, color: C.SLATE }}>{fmtDate(o.datum)}</span>
+                                      {Number(o.wertCHF) > 0 && <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: isCurrent ? C.INK : C.SLATE, textDecoration: isCurrent ? "none" : "line-through" }}>CHF {fmtCHF(o.wertCHF)}</span>}
+                                      {Number(o.wertBarter) > 0 && <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: isCurrent ? "#6B2FAB" : C.SLATE, textDecoration: isCurrent ? "none" : "line-through" }}>Barter {fmtCHF(o.wertBarter)}</span>}
+                                      {isCurrent ? <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 99, background: "#EAF0FB", color: "#2A5FC4" }}>Aktuell</span> : <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: "#F0EDE4", color: C.SLATE }}>Überholt</span>}
+                                    </div>
+                                    {o.beschreibung && (
+                                      <p style={{ fontSize: 12, color: isCurrent ? C.INK : C.SLATE, margin: 0, textDecoration: isCurrent ? "none" : "line-through", lineHeight: 1.5 }}>{o.beschreibung}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                        {l.letzterKontakt && (
+                          <div>
+                            <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 3 }}>Letzter Kontakt</p>
+                            <p style={{ fontSize: 13, color: C.INK, margin: 0, display: "flex", alignItems: "center", gap: 5 }}><Calendar size={12} style={{ color: C.SLATE }} />{fmtDate(l.letzterKontakt)}</p>
+                          </div>
+                        )}
+                        {l.naechsteAktionDatum && (
+                          <div>
+                            <p style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: C.SLATE, fontFamily: "'Oswald', sans-serif", marginBottom: 3 }}>Nächste Aktion</p>
+                            <p style={{ fontSize: 13, color: urgent ? C.RED2 : C.INK, margin: 0, display: "flex", alignItems: "center", gap: 5 }}>
+                              <Calendar size={12} style={{ color: urgent ? C.RED2 : C.SLATE }} />{fmtDate(l.naechsteAktionDatum)}
+                              {dN === 0 && " · Heute"}{dN !== null && dN > 0 && dN <= 7 && ` · in ${dN} Tag${dN === 1 ? "" : "en"}`}{dN !== null && dN < 0 && " · Überfällig"}
+                            </p>
+                            {l.naechsteAktion && <p style={{ fontSize: 12, color: C.SLATE, margin: "2px 0 0" }}>{l.naechsteAktion}</p>}
+                          </div>
+                        )}
+                      </div>
+                      {l.notizen && <p style={{ fontSize: 13, fontStyle: "italic", color: C.SLATE, margin: 0 }}>{l.notizen}</p>}
+                      {editMode && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 10, borderTop: `1px solid ${C.LINE}` }}>
+                          <button onClick={() => setModalLead(l)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.INK }}><Pencil size={13} />Bearbeiten</button>
+                          {confirmDelLead === l.id
+                            ? <><button onClick={() => delLead(l.id)} style={{ padding: "6px 12px", borderRadius: 5, border: "none", background: C.RED2, cursor: "pointer", fontSize: 13, fontWeight: 500, color: "#fff" }}>Wirklich löschen</button><button onClick={() => setConfirmDelLead(null)} style={{ padding: "6px 12px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: C.SLATE }}>Abbrechen</button></>
+                            : <button onClick={() => setConfirmDelLead(l.id)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.RED2 }}><Trash2 size={13} />Löschen</button>
+                          }
+                          {/* Schnell-Aktionen für Offerten-Entscheid */}
+                          {l.status !== "Angebot angenommen" && l.status !== "Angebot abgelehnt" && (
+                            <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                              <button onClick={() => saveLead({ ...l, status: "Angebot angenommen" })} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: "1px solid #C8E0C0", borderRadius: 5, background: "#E9EFE7", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#3C6B2F" }}>
+                                <CheckCircle2 size={13} />Angenommen
+                              </button>
+                              <button onClick={() => saveLead({ ...l, status: "Angebot abgelehnt" })} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid #F0C0C0`, borderRadius: 5, background: "#F8DEDE", cursor: "pointer", fontSize: 13, fontWeight: 600, color: C.RED2 }}>
+                                <XCircle size={13} />Abgelehnt
+                              </button>
+                            </div>
+                          )}
+                          {/* Rückstufung: zurück in Verhandlung oder zurück in Lead-Liste */}
+                          <div style={{ display: "flex", gap: 8, marginLeft: isAbgeschlossen ? "auto" : 0 }}>
+                            {isAbgeschlossen && l.status !== "Abgebrochen" && (
+                              <button onClick={() => saveLead({ ...l, status: "Verhandlung" })} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 500, color: C.SLATE }}>
+                                ↩ Zurück in Verhandlung
+                              </button>
+                            )}
+                            <button onClick={() => leadToInteressent(l)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", border: "1px solid #E0A100", borderRadius: 5, background: "#FCEDD9", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#9A5B00" }} title="Zurück in Lead-Liste verschieben">
+                              ↩ Zurück in Lead-Liste
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* ── INTERESSENTEN ── */}
+            <div style={{ marginTop: 36, borderTop: `2px solid ${C.LINE}`, paddingTop: 24 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <h2 style={{ fontSize: 16, fontWeight: 700, fontFamily: "'Oswald', sans-serif", color: C.INK, margin: "0 0 3px" }}>Lead-Liste / Interessenten</h2>
+                  <p style={{ fontSize: 13, color: C.SLATE, margin: 0 }}>Firmen, mit denen wir noch in Kontakt treten wollen</p>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ position: "relative" }}>
+                    <Search size={14} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: C.SLATE }} />
+                    <input style={{ ...inpStyle, paddingLeft: 30, width: 180 }} placeholder="Suchen…" value={intSearch} onChange={(e) => setIntSearch(e.target.value)} />
+                  </div>
+                  {editMode && <button onClick={() => setModalInteressent(emptyInteressent())} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", border: "none", borderRadius: 5, background: "#E0A100", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: "'Oswald', sans-serif" }}><Plus size={16} />Interessent erfassen</button>}
+                </div>
+              </div>
+
+              {interessenten.filter((i) => !intSearch || i.firma.toLowerCase().includes(intSearch.toLowerCase()) || (i.notizen || "").toLowerCase().includes(intSearch.toLowerCase())).length === 0 && (
+                <div style={{ border: `1px solid ${C.LINE}`, borderRadius: 8, padding: "32px 24px", textAlign: "center", background: "#fff" }}>
+                  <p style={{ fontWeight: 600, color: C.INK, margin: "0 0 5px" }}>{interessenten.length === 0 ? "Noch keine Interessenten erfasst" : "Keine Treffer"}</p>
+                  <p style={{ fontSize: 13, color: C.SLATE, margin: 0 }}>Firmen eintragen, die ihr als Sponsoren gewinnen wollt.</p>
+                </div>
+              )}
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {interessenten
+                  .filter((i) => !intSearch || i.firma.toLowerCase().includes(intSearch.toLowerCase()) || (i.notizen || "").toLowerCase().includes(intSearch.toLowerCase()))
+                  .map((int) => (
+                    <div key={int.id} style={{ background: "#fff", borderRadius: 8, border: `1px solid ${C.LINE}`, borderLeft: "4px solid #E0A100", padding: "14px 18px" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 5 }}>
+                            <span style={{ fontWeight: 700, fontSize: 15, color: C.INK }}>{int.firma}</span>
+                            {int.branche && <span style={{ fontSize: 11, padding: "1px 8px", borderRadius: 99, background: "#F0EDE4", color: C.SLATE }}>{int.branche}</span>}
+                            {int.internPerson && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 4 }}><User size={12} />{int.internPerson}</span>}
+                          </div>
+                          {(Number(int.potenzialCHF) > 0 || Number(int.potenzialBarter) > 0) && (
+                            <div style={{ display: "flex", gap: 10, marginBottom: 4 }}>
+                              {Number(int.potenzialCHF) > 0 && <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "'Oswald', sans-serif", color: C.INK }}>{fmtCHF(int.potenzialCHF)} Cash</span>}
+                              {Number(int.potenzialBarter) > 0 && <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "'Oswald', sans-serif", color: "#6B2FAB" }}>{fmtCHF(int.potenzialBarter)} Barter</span>}
+                              <span style={{ fontSize: 11, color: C.SLATE }}>gesch. Potenzial</span>
+                            </div>
+                          )}
+                          {(int.kontaktName || int.kontaktEmail || int.kontaktTelefon) && (
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+                              {int.kontaktName && <span style={{ fontSize: 12, color: C.INK }}>{int.kontaktName}{int.kontaktRolle ? ` · ${int.kontaktRolle}` : ""}</span>}
+                              {int.kontaktEmail && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 4 }}><Mail size={11} />{int.kontaktEmail}</span>}
+                              {int.kontaktTelefon && <span style={{ fontSize: 12, color: C.SLATE, display: "flex", alignItems: "center", gap: 4 }}><Phone size={11} />{int.kontaktTelefon}</span>}
+                            </div>
+                          )}
+                          {int.notizen && <p style={{ fontSize: 13, color: C.SLATE, margin: 0, fontStyle: "italic" }}>{int.notizen}</p>}
+                        </div>
+                        {editMode && (
+                          <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <button onClick={() => interessentToLead(int)} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 11px", border: "1px solid #4A7FE8", borderRadius: 5, background: "#EAF0FB", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#2A5FC4" }}>
+                              <TrendingUp size={13} />In Verhandlung
+                            </button>
+                            <button onClick={() => setModalInteressent(int)} style={{ padding: "5px 10px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", color: C.INK }}><Pencil size={13} /></button>
+                            {confirmDelInt === int.id
+                              ? <><button onClick={() => delInteressent(int.id)} style={{ padding: "5px 10px", borderRadius: 5, border: "none", background: C.RED2, cursor: "pointer", fontSize: 12, color: "#fff" }}>Löschen</button><button onClick={() => setConfirmDelInt(null)} style={{ padding: "5px 10px", background: "none", border: "none", cursor: "pointer", fontSize: 12, color: C.SLATE }}>Abbruch</button></>
+                              : <button onClick={() => setConfirmDelInt(int.id)} style={{ padding: "5px 10px", border: `1px solid ${C.LINE}`, borderRadius: 5, background: "#fff", cursor: "pointer", color: C.RED2 }}><Trash2 size={13} /></button>
+                            }
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+
+      {modalSponsor && <SponsorModal initial={modalSponsor} onSave={saveSponsor} onClose={() => setModalSponsor(null)} />}
+      {modalLead && <LeadModal initial={modalLead} onSave={saveLead} onClose={() => setModalLead(null)} />}
+      {modalInteressent && <InteressentModal initial={modalInteressent} onSave={saveInteressent} onClose={() => setModalInteressent(null)} />}
+    </div>
+  );
+}
+
+
+    // App-Instanz mit Settings-Button im Header ergänzen
+    const OriginalApp = App;
+    function App(props) {
+      const [showSettings, setShowSettings] = useState(false);
+      
+      // Anthropic API key aus localStorage für PDF-Extraktion
+      // (wird in extractSponsorFromPdf verwendet)
+      useEffect(() => {
+        window.__ehcAnthropicKey = localStorage.getItem("ehc_anthropic_key") || "";
+      }, []);
+
+      return (
+        <>
+          <OriginalApp onSettingsClick={() => setShowSettings(true)} />
+          {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        </>
+      );
+    }
+
+    createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
