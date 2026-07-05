@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>EHC Debug</title>
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;color:red"><h2>JavaScript Fehler</h2><pre>' + msg + '\nZeile: ' + line + '\nDatei: ' + src + '\n' + (err&&err.stack||'') + '</pre></div>';
+      return false;
+    };
+  </script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"><p style="padding:20px">Lade...</p></div>
+  <script type="text/babel" data-presets="react">
+    const { useState } = React;
+
+    function App() {
+      const [count, setCount] = useState(0);
+      return (
+        <div style={{padding: 40, fontFamily: 'sans-serif', background: '#F7F4EE', minHeight: '100vh'}}>
+          <div style={{background: '#13131a', color: 'white', padding: '20px 30px', borderRadius: 8, marginBottom: 20}}>
+            <h1 style={{fontFamily: 'Oswald, sans-serif', fontSize: 24, margin: 0}}>EHC CHUR · SPONSORING</h1>
+            <p style={{opacity: 0.6, marginTop: 4}}>Dashboard lädt korrekt ✓</p>
+          </div>
+          <p>Wenn du das siehst, funktioniert React + Babel einwandfrei.</p>
+          <button 
+            onClick={() => setCount(count + 1)}
+            style={{marginTop: 16, padding: '10px 20px', background: '#C8112E', color: 'white', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 14}}
+          >
+            Test-Klick: {count}
+          </button>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
